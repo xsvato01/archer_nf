@@ -20,7 +20,7 @@ This secret has to be added to nextflow.config:
 
 ## Samplesheet
 
-There is a online [samplesheet](https://docs.google.com/spreadsheets/d/1WOktQDMH13d_zr0g8be1BqysMd7TIyy4LrzPywfvjhA/edit#gid=0) to fill.
+There is a online CHANGE THIS [samplesheet](https://docs.google.com/spreadsheets/d/1WOktQDMH13d_zr0g8be1BqysMd7TIyy4LrzPywfvjhA/edit#gid=0) to fill.
 Make sure to run `getSamplesheet.sh` to download and convert the samplesheet to input Nextlow parameters.
 
 @Jan Svaton 2024
