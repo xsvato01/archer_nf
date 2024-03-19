@@ -1,0 +1,15 @@
+name: vardict
+channels:
+  - bioconda
+  - defaults
+dependencies:
+  - _libgcc_mutex=0.1=main
+  - _openmp_mutex=4.5=1_gnu
+  - libgcc-ng=9.3.0=h5101ec6_17
+  - libgomp=9.3.0=h5101ec6_17
+  - openjdk=8.0.152=h7b6447c_3
+  - perl=5.26.2=h14c3975_0
+  - vardict=2018.10.18=pl526_1
+  - vardict-java=1.5.1=0
+  - perl-bio-samtools=1.43=pl526h1341992_1
+  - samtools=1.6=h244ad75_5

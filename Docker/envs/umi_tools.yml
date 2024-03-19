@@ -1,0 +1,7 @@
+name: umi_tools
+channels:
+  - bioconda
+  - defaults
+dependencies:
+  - umi_tools=1.0.1=py36h516909a_1
+  - samtools=1.6=hb116620_7
