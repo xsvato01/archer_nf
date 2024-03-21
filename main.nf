@@ -1,7 +1,7 @@
 process REFORMAT_SAMPLE {
 	tag "Reformating $sample.name using $task.cpus CPUs $task.memory"
 	label "s_cpu"
-	label "xs_mem"
+	label "xxs_mem"
 
 	input:
 	val sample
@@ -15,7 +15,7 @@ process REFORMAT_SAMPLE {
 process COLLECT_BASECALLED {
 	tag "COLLECT_BASECALLED on $name using $task.cpus CPUs and $task.memory memory"
 	label "s_cpu"
-	label "xs_mem"
+	label "xxs_mem"
 
 	input:
 	tuple val(name), val(sample)
@@ -32,7 +32,8 @@ process COLLECT_BASECALLED {
 
 process UMI_extract {
 	tag "UMI_extract on $name using $task.cpus CPUs and $task.memory memory"
-	// publishDir  "${launchDir}/${name}/trimmed/", mode:'copy'
+	label "s_cpu"
+	label "xs_mem"
 	
 	input:
 	tuple val(name), val(sample), path(fwd), path(rev)
@@ -50,7 +51,8 @@ process UMI_extract {
 
 process TRIMMING {
 	tag "TRIMMING on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir  "${launchDir}/${name}/trimmed/", mode:'copy'
+	label "s_cpu"
+	label "xxs_mem"
 	
 	input:
 	tuple val(name), val(sample), path(reads)
@@ -69,7 +71,6 @@ process TRIMMING {
 
 process FIRST_ALIGN_BAM {
 	tag "FIRST_ALIGN_BAM on $name using $task.cpus CPUs and $task.memory memory"
-	// publishDir "${launchDir}/${name}/mapped/", mode:'copy'
 	label "m_cpu"
 	label "l_mem"
 
@@ -78,7 +79,6 @@ process FIRST_ALIGN_BAM {
 
 	output:
     tuple val(name), val(sample), path("${name}.bam")
-	//, path("${name}.sorted.bai")
 
 	script:
 	rg = "\"@RG\\tID:${name}\\tSM:${name}\\tLB:${name}\\tPL:ILLUMINA\""
@@ -92,7 +92,6 @@ process FIRST_ALIGN_BAM {
 
 process SORT_INDEX {
 	tag "Sort index on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${params.outDirectory}/${sample.run}/${name}/mapped/", mode:'copy'
 	label "m_mem"
 	label "s_cpu"
 
@@ -115,8 +114,8 @@ process SORT_INDEX {
 
 process DEDUP {
 	tag "DEDUP on $name using $task.cpus CPUs and $task.memory memory"
-	// publishDir "${launchDir}/${name}/mapped/", mode:'copy'
-	label "m_cpu"
+	publishDir "${launchDir}/${sample.run}/mapped/", mode:'copy'
+	label "s_cpu"
 	label "l_mem"
 
 	input:
@@ -174,7 +173,7 @@ process FILTER_MUTECT {
 
 process NORMALIZE_MUTECT {
 	tag "NORMALIZE_MUTECT on $name using $task.cpus CPUs $task.memory"
-	label "s_mem"
+	label "xxs_mem"
 	label "s_cpu"
 	container "staphb/bcftools:1.10.2"
 
@@ -193,7 +192,6 @@ process NORMALIZE_MUTECT {
 
 process ANNOTATE_MUTECT {
 	tag "ANNOTATE_MUTECT on $name using $task.cpus CPUs $task.memory"
-	// publishDir "${params.outDirectory}/${sample.run}/variants/", mode:'copy'
 	label "s_mem"
 	label "s_cpu"
 
@@ -215,7 +213,7 @@ process ANNOTATE_MUTECT {
 process FILTER_VCF {
 	tag "FILTER_VCF on $name using $task.cpus CPUs $task.memory"
 	container "staphb/bcftools:1.10.2"
-	label "s_mem"
+	label "xxs_mem"
 	label "s_cpu"
 
 	input:
@@ -233,15 +231,15 @@ process FILTER_VCF {
 
 process VCF2CSV {
 	tag "VCF2CSV on $name using $task.cpus CPUs $task.memory"
-	// publishDir "${params.outDirectory}/${sample.run}/variants/", mode:'copy'
-	label "s_mem"
+	publishDir "${params.outDirectory}/${sample.run}/variants/", mode:'copy'
+	label "xs_mem"
 	label "s_cpu"
 
 	input:
 	tuple val(name), val(sample), path(vcf_input)
 	
 	output:
-	tuple val(name), val(sample), path("${name}.csv")
+	tuple val(sample.run), path("${name}.csv")
 
 	script:
 	"""
@@ -251,14 +249,33 @@ process VCF2CSV {
 	"""	
 }
 
+process MERGE_TABLES {
+	tag "MERGE_TABLES on $run using $task.cpus CPUs $task.memory"
+	publishDir "${params.outDirectory}/${run}/variants/", mode:'copy'
+	label "s_mem"
+	label "s_cpu"
+	debug true
+
+	input:
+	tuple val(run), path(all_annotated_normed)
+	
+	output:
+	path "${run}.merged_variant.table_NEW.tsv"
+
+	script:
+	"""
+	echo MERGE_TABLES $run
+	source activate erko
+	Rscript --vanilla $params.mergescript $run
+	"""	
+}
 
 process FLT3 {
 	tag "FLT3 on $name using $task.cpus CPUs $task.memory"
-	// publishDir "${params.outDirectory}/${sample.run}/variants/", mode:'copy'
-	label "s_mem"
+	publishDir "${params.outDirectory}/${sample.run}/FLT3/", mode:'copy'
+	label "xs_mem"
 	label "s_cpu"
 	// errorStrategy 'ignore'
-	debug true
 
 	input:
 	tuple val(name), val(sample), path(bam), path(bai)
@@ -279,12 +296,15 @@ process FLT3 {
 
 process BAMQC {
 	tag "BAMQC on $name using $task.cpus CPUs and $task.memory memory"
+	label "s_mem"
+	label "s_cpu"
 	container 'registry.gitlab.ics.muni.cz:443/450402/qc_cmbg:26'
+
 	input:
 	tuple val(name), val(sample), path(bam), path(bai)
 
 	output:
-	path "*"
+	tuple val(name), val(sample), path("*")
 
 	script:
 	"""
@@ -296,20 +316,62 @@ process BAMQC {
 	"""
 }
 
-process MULTIQC {
-	tag "MultiQC on all samples using $task.cpus CPUs and $task.memory memory"
-	// publishDir "${params.outdir}/multiqc/", mode:'copy'
-	label "m_mem"
+process COVERAGE {
+	tag "COVERAGE on $name using $task.cpus CPUs and $task.memory memory"
+	label "l_mem"
 	label "s_cpu"
 
 	input:
-	path('*')
+	tuple val(name), val(sample), path(bam), path(bai)
+
+	output:
+	tuple val(name), val(sample), path("${name}.PBcov.cons.txt")
+
+	script:
+	"""
+	echo COVERAGE $name
+	source activate bedtools
+	bedtools coverage -abam $params.bed -b $bam -d > ${name}.PBcov.cons.txt
+	"""
+}
+
+process COVERAGE_POSTPROCESS {
+	tag "COVERAGE_POSTPROCESS on $name using $task.cpus CPUs and $task.memory memory"
+	publishDir "${params.outDirectory}/${sample.run}/Cov/", mode:'copy'
+	label "s_mem"
+	label "xs_mem"
+
+	input:
+	tuple val(name), val(sample), path(txt)
+
+	output:
+	tuple val(name), val(sample), path("${name}.perexon_stat.txt")
+
+	script:
+	"""
+	echo COVERAGE_POSTPROCESS $name
+	source activate erko
+	Rscript --vanilla $params.covscript $txt
+	ls -al
+	"""
+}
+
+process MULTIQC {
+	tag "MultiQC on all samples using $task.cpus CPUs and $task.memory memory"
+	publishDir "${params.outDirectory}/${run}/QC/", mode:'copy'
+	container 'ewels/multiqc:v1.18'
+	label "xs_mem"
+	label "s_cpu"
+
+	input:
+	tuple val(run), path(all_annotated_normed)
 
 	output:
 	path "*"
 
 	script:
 	"""
+	echo MULTIQC $run
 	multiqc . -n MultiQC.html
 	"""
 
@@ -326,32 +388,23 @@ workflow {
 	firstBAM = FIRST_ALIGN_BAM(trimmedFQs)
 	sortedBamBai = SORT_INDEX(firstBAM)
 	dedupedBam = DEDUP(sortedBamBai)
-	BAMQC(dedupedBam)
+	QCs = BAMQC(dedupedBam)
+	ToMultiQC = QCs.map({return [it[1].run, it[2]]}).
+		groupTuple()
+		.map({return [it[0], it[1].flatten()]})//.view{"$it is groupTuple"}
+	MULTIQC(ToMultiQC)
+
+	PBcov = COVERAGE(dedupedBam)
+	COVERAGE_POSTPROCESS(PBcov)
 
 	rawVCFs = MUTECT2(dedupedBam)
 	filteredVCFs = FILTER_MUTECT(rawVCFs)
 	normedVCFs = NORMALIZE_MUTECT(filteredVCFs)
 	annotatedVCFs = ANNOTATE_MUTECT(normedVCFs)
 	filteredAnnotatedVCFs = FILTER_VCF(annotatedVCFs)
-	csv = VCF2CSV(filteredAnnotatedVCFs)
+	CSVs = VCF2CSV(filteredAnnotatedVCFs)
+	// CSVs.groupTuple().view{"$it is groupTuple CSVs"}
+	MERGE_TABLES(CSVs.groupTuple())
 
-	FLT3(dedupedBam).view()
-
-	// trimmed1	= TRIMMING_1(rawfastq)
-	// trimmed2	= TRIMMING_2(trimmed1)	
-	// sortedbam	= FIRST_ALIGN_BAM(trimmed2)
-	// pileup		= PILE_UP(sortedbam[0])
-	// varscanned	= VARSCAN(pileup)
-	// vardicted	= VARDICT(sortedbam[0],sortedbam[1])
-	// normalized	= NORMALIZE_VARIANTS(varscanned,vardicted)
-	// merged		= MERGE_VARIANTS(normalized)
-	// norm_merged	= NORMALIZE_MERGED_VARIANTS(merged)
-	// annotated	= ANNOTATE(norm_merged)
-	// annot_norm	= NORMALIZE_VEP(annotated)
-	// txt		= CREATE_TXT(annot_norm)
-	// final_table	= CREATE_FINAL_TABLE(txt)
-
-	// covered		= COVERAGE(sortedbam[0])
-	// COVERAGE_STATS(covered)					
-	// MULTIQC(sortedbam[0])	
+	FLT3(dedupedBam)	
 }
