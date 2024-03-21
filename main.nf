@@ -21,379 +21,322 @@ process COLLECT_BASECALLED {
 	tuple val(name), val(sample)
 
 	output:
-	tuple val(name), val(sample), path("*R{1}*.fastq.gz"). path("*R{2}*.fastq.gz")
+	tuple val(name), val(sample), path("*R1*.fastq.gz"), path("*R2*.fastq.gz")
 
 	script:
 	"""
 	echo COLLECT_BASECALLED $name
-	cp  /mnt/shared/MedGen/sequencing_results/primary_data/*${sample.run}/raw_fastq/${name}*R{1,2}* ./
+	cp  /mnt/shared/MedGen/sequencing_results/primary_data/*${sample.run}/raw_fastq/${name}* ./
 	"""
 } 
 
 process UMI_extract {
-	tag "trimming 1 on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir  "${launchDir}/${name}/trimmed/", mode:'copy'
+	tag "UMI_extract on $name using $task.cpus CPUs and $task.memory memory"
+	// publishDir  "${launchDir}/${name}/trimmed/", mode:'copy'
 	
 	input:
-	tuple val(name), path(fwd), path(rev)
+	tuple val(name), val(sample), path(fwd), path(rev)
 
 	output:
-	tuple val(name), path("umi*.fastq.gz")
+	tuple val(name), val(sample), path("${name}.umi*.fastq.gz")
 
 	script:
 	""" 
-	echo $fwfq
-	echo $revfq
-	source activate umitools
+	echo UMI_extract $name
+	source activate umi_tools
 	umi_tools extract -I ${fwd} --bc-pattern=NNNNNNNN --read2-in=${rev} --stdout=${name}.umi.R1.fastq.gz --read2-out=${name}.umi.R2.fastq.gz
 	"""
 }
 
-process TRIMMING_1 {
-	tag "trimming 1 on $name using $task.cpus CPUs and $task.memory memory"
+process TRIMMING {
+	tag "TRIMMING on $name using $task.cpus CPUs and $task.memory memory"
 	publishDir  "${launchDir}/${name}/trimmed/", mode:'copy'
 	
 	input:
-	tuple val(name), path(reads)
+	tuple val(name), val(sample), path(reads)
 
 	output:
-	tuple val(name), path("*.fastq.gz")
+	tuple val(name), val(sample), path("*.fastq.gz")
 
 	script:
-	""" 
-	cutadapt -a CTGTCTCTTATACACATCT -A CTGTCTCTTATACACATCT \
-		-o ${name}.trimmed1.R1.fastq.gz -p ${name}.trimmed1.R2.fastq.gz $reads
+	"""
+	echo TRIMMING $name
+	source activate cutadapt
+	cutadapt -g AACCGCCAGGAGT -m 50 -o ${name}.trimmed1.R1.fastq.gz -p ${name}.trimmed1.R2.fastq.gz $reads
 	"""
 }
 
-
-process TRIMMING_2 {
-	tag "trimming 2 on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir  "${launchDir}/${name}/trimmed/", mode:'copy'
-	
-	input:
-	tuple val(name), path(reads)
-
-	output:
-	tuple val(name), path("*.fastq.gz")
-
-	script:
-	""" 
-	cutadapt -a CAAGGGGGACTGTAGATGGG...TAGGATCTGACTGCGGCTCC \
-		-A GGAGCCGCAGTCAGATCCTA...CCCATCTACAGTCCCCCTTG \
-		-a ACAACGTTCTGGTAAGGACAX -A TGTCCTTACCAGAACGTTGTX --overlap 4 \
-		-o ${name}.trimmed2.R1.fastq.gz -p ${name}.trimmed2.R2.fastq.gz $reads
-	"""
-}
 
 process FIRST_ALIGN_BAM {
-	tag "first align on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${name}/mapped/", mode:'copy'
-	
+	tag "FIRST_ALIGN_BAM on $name using $task.cpus CPUs and $task.memory memory"
+	// publishDir "${launchDir}/${name}/mapped/", mode:'copy'
+	label "m_cpu"
+	label "l_mem"
+
 	input:
-	tuple val(name), path(reads)
+	tuple val(name), val(sample), path(reads)
 
 	output:
-        tuple val(name), path("${name}.sorted.bam")
-	tuple val(name), path("${name}.sorted.bai")
+    tuple val(name), val(sample), path("${name}.bam")
+	//, path("${name}.sorted.bai")
 
 	script:
 	rg = "\"@RG\\tID:${name}\\tSM:${name}\\tLB:${name}\\tPL:ILLUMINA\""
 	"""
-	bwa mem -R ${rg} -t 4 ${params.refindex} $reads \
-	| samtools view -Sb -o - -| samtools sort -o ${name}.sorted.bam
-	samtools index ${name}.sorted.bam ${name}.sorted.bai	
+	echo FIRST_ALIGN_BAM $name
+	source activate bwa
+	bwa mem -R ${rg} -t $task.cpus ${params.refindex} $reads > ${name}.sam
+	samtools view -Sb ${name}.sam -o ${name}.bam
 	"""
 }
 
-process PILE_UP {
-	tag "PILE_UP on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${name}/vcf/", pattern: '*.md.ba*', mode:'copy'
-	
+process SORT_INDEX {
+	tag "Sort index on $name using $task.cpus CPUs and $task.memory memory"
+	publishDir "${params.outDirectory}/${sample.run}/${name}/mapped/", mode:'copy'
+	label "m_mem"
+	label "s_cpu"
+
 	input:
-	tuple val(name), path(bam)
+	tuple val(name), val(sample), path(bam)
 
 	output:
-	tuple val(name), path("*.mpileup")
-	
+	tuple val(name), val(sample), path("${name}.sorted.bam"), path("${name}.sorted.bai")
+
+
 	script:
 	"""
-	#
-	samtools mpileup -x -B -Q 25 -d 999999 -L 999999 -F 0.0005 -f ${params.ref}.fa $bam > ${name}.mpileup
+	echo SORT_INDEX $name
+	source activate samtools
+	samtools sort $bam -o ${name}.sorted.bam
+	samtools index ${name}.sorted.bam ${name}.sorted.bai
 	"""
 }
 
 
+process DEDUP {
+	tag "DEDUP on $name using $task.cpus CPUs and $task.memory memory"
+	// publishDir "${launchDir}/${name}/mapped/", mode:'copy'
+	label "m_cpu"
+	label "l_mem"
 
-process VARSCAN {
-	tag "VARSCAN on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${name}/vcf/", mode:'copy'
-	
 	input:
-	tuple val(name), path(mpileup)
+	tuple val(name), val(sample), path(bam), path(bai)
 
 	output:
-	tuple val(name), path('*.snv.vcf')
-	tuple val(name), path('*.indel.vcf')
-	
+    tuple val(name), val(sample), path("${name}.deduped.bam"), path("${name}.deduped.bai")
+
 	script:
 	"""
-	varscan mpileup2snp $mpileup \
-		--strand-filter 0 --p-value 0.95 --min-coverage 50 --min-reads2 8 --min-avg-qual 25 --min-var-freq 0.0005 \
-		--output-vcf | sed 's/Sample1/varscan_SNV/g' > ${name}.varscan.snv.vcf
-
-	varscan mpileup2indel $mpileup \
-		 --strand-filter 0 --p-value 0.95 --min-coverage 50 --min-reads2 8 --min-avg-qual 25 --min-var-freq 0.0005 \
-		--output-vcf | sed 's/Sample1/varscan_INDEL/g' > ${name}.varscan.indel.vcf
+	echo DEDUP $name
+	source activate umi_tools
+	umi_tools dedup -I $bam --paired -S ${name}.deduped.bam
+	samtools index ${name}.deduped.bam ${name}.deduped.bai
 	"""
 }
 
+process MUTECT2 {
+	tag "MUTECT2 on $name using $task.cpus CPUs and $task.memory memory"
+	label "m_mem"
+	label "s_cpu"
 
-
-process VARDICT {
-	tag "VARDICT on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${name}/vcf/", mode:'copy'
-	
 	input:
-	tuple val(name), path(bam)
-	tuple val(name), path(bai)
+	tuple val(name), val(sample), path(bam), path(bai)
+	
+	output:
+	tuple val(name), val(sample), path ("${sample.name}.mutect.vcf")
 
+	script:
+	"""
+	echo MUTECT2 $name
+	source activate gatk4
+	gatk Mutect2 --reference ${params.ref}.fa --input ${bam} --tumor-sample $name --annotation StrandArtifact --min-base-quality-score 20 --intervals $params.ivl --output ${sample.name}.mutect.vcf
+	"""
+}
+
+process FILTER_MUTECT {
+	tag "FILTER_MUTECT on $name using $task.cpus CPUs and $task.memory memory"
+	label "s_mem"
+	label "s_cpu"
+
+	input:
+	tuple val(name), val(sample), path(vcf_input)
+	
+	output:
+	tuple val(name), val(sample), path ("${sample.name}.mutect.filt.vcf")
+
+	script:
+	"""
+	echo FILTER_MUTECT $name
+	source activate gatk4
+	gatk FilterMutectCalls -V $vcf_input -O ${sample.name}.mutect.filt.vcf
+	"""
+}
+
+process NORMALIZE_MUTECT {
+	tag "NORMALIZE_MUTECT on $name using $task.cpus CPUs $task.memory"
+	label "s_mem"
+	label "s_cpu"
+	container "staphb/bcftools:1.10.2"
+
+	input:
+	tuple val(name), val(sample), path(vcf_input)
+	
+	output:
+	tuple val(name), val(sample), path ("${sample.name}.mutect.filt.norm.vcf")
+
+	script:
+	"""
+	echo NORMALIZE_MUTECT $name
+	bcftools norm -m-both $vcf_input > ${sample.name}.mutect.filt.norm.vcf
+	"""
+}
+
+process ANNOTATE_MUTECT {
+	tag "ANNOTATE_MUTECT on $name using $task.cpus CPUs $task.memory"
+	// publishDir "${params.outDirectory}/${sample.run}/variants/", mode:'copy'
+	label "s_mem"
+	label "s_cpu"
+
+	input:
+	tuple val(name), val(sample), path(vcf_input)
+	
+	output:
+	tuple val(name), val(sample), path("${sample.name}.mutect2.filt.norm.vep.vcf")
+
+	script:
+	"""
+	echo ANNOTATE_MUTECT $name
+	source activate vep
+	vep -i $vcf_input --cache --cache_version 95 --dir_cache $params.vep \
+	--fasta ${params.ref}.fa --merged --offline --vcf --everything -o ${sample.name}.mutect2.filt.norm.vep.vcf
+	"""	
+}
+
+process FILTER_VCF {
+	tag "FILTER_VCF on $name using $task.cpus CPUs $task.memory"
+	container "staphb/bcftools:1.10.2"
+	label "s_mem"
+	label "s_cpu"
+
+	input:
+	tuple val(name), val(sample), path(vcf_input)
+	
+	output:
+	tuple val(name), val(sample), path("${sample.name}.mutect2.filt.norm.vep.filt.vcf")
+
+	script:
+	"""
+	echo FILTER_VCF $name
+	bcftools view -f 'PASS,clustered_events,multiallelic' $vcf_input > ${sample.name}.mutect2.filt.norm.vep.filt.vcf
+	"""	
+}
+
+process VCF2CSV {
+	tag "VCF2CSV on $name using $task.cpus CPUs $task.memory"
+	// publishDir "${params.outDirectory}/${sample.run}/variants/", mode:'copy'
+	label "s_mem"
+	label "s_cpu"
+
+	input:
+	tuple val(name), val(sample), path(vcf_input)
+	
+	output:
+	tuple val(name), val(sample), path("${name}.csv")
+
+	script:
+	"""
+	echo VCF2CSV $name
+	source activate vcf2csv
+	python $params.vcf2csv simple --build GRCh37 -i $vcf_input -o ${name}.csv
+	"""	
+}
+
+
+process FLT3 {
+	tag "FLT3 on $name using $task.cpus CPUs $task.memory"
+	// publishDir "${params.outDirectory}/${sample.run}/variants/", mode:'copy'
+	label "s_mem"
+	label "s_cpu"
+	// errorStrategy 'ignore'
+	debug true
+
+	input:
+	tuple val(name), val(sample), path(bam), path(bai)
+	
+	output:
+	tuple val(name), val(sample), path("${name}.deduped_FLT3_ITD_summary.txt")
+
+	script:
+	"""
+	echo FLT3 $name
+	source activate perl
+    tar -C /tmp -xf $params.flt3tar
+	perl /tmp/FLT3/FLT3_ITD_ext/FLT3_ITD_ext.pl --bam $bam --output ./ --ngstype amplicon --genome hg19 --fgbiojar $params.fgbio --picardjar $params.picard --refindex /tmp/FLT3/FLT3_bwaindex/FLT3_dna_e1415
+	ls -alh
+	"""	
+}
+
+
+process BAMQC {
+	tag "BAMQC on $name using $task.cpus CPUs and $task.memory memory"
+	container 'registry.gitlab.ics.muni.cz:443/450402/qc_cmbg:26'
+	input:
+	tuple val(name), val(sample), path(bam), path(bai)
 
 	output:
-	tuple val(name), path ("*.vcf")
+	path "*"
 
 	script:
 	"""
-	vardict -G ${params.ref}.fa -f 0.0005 -b ${bam} \
-		-c 1 -S 2 -E 3 -r 8 -Q 1 -q 25 -P 2 -m 8 \
-		${params.varbed} | Rscript --vanilla ${params.teststrandbias} | perl ${params.var2vcf_valid} -f 0.0005 -d 50 -c 5 -p 2 -q 25 -Q 1 -v 8 -m 8 -N vardict - > ${name}.vardict.vcf
-	"""
-}
-
-
-
-process NORMALIZE_VARIANTS {
-	tag "Normalizing variants on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${name}/vcf/", mode:'copy'
-	
-	input:
-	tuple val(name), path (varscan_snv_path)
-	tuple val(name), path (varscan_indel_path)
-	tuple val(name), path (vardict_path)
-
-	output:
-	tuple val(name), path ("*varscan.snv.norm.vcf")
-	tuple val(name), path ("*varscan.indel.norm.vcf")
-	tuple val(name), path ("*.vardict.norm.vcf")
-	
-	script:
-	"""
-	bcftools -v
-	bcftools norm -f ${params.ref}.fa $varscan_snv_path -o ${name}.varscan.snv.norm.vcf
-	bcftools norm -f ${params.ref}.fa $varscan_indel_path -o ${name}.varscan.indel.norm.vcf
-	bcftools norm -f ${params.ref}.fa $vardict_path -o ${name}.vardict.norm.vcf
-	
-	"""
-}
-
-
-process MERGE_VARIANTS {
-	tag "Merging variants on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${name}/vcf/", mode:'copy'
-	
-	input:
-	tuple val(name), path (varscan_snv_norm_path)
-	tuple val(name), path (varscan_indel_norm_path)
-	tuple val(name), path (vardict_norm_path)
-
-	output:
-	tuple val(name), path ("*allcallers.merged.vcf")
-	
-	script:
-	"""
-	java -jar ${params.gatk36} -T CombineVariants --variant:vardict ${vardict_norm_path} \
-		--variant:varscan_SNV ${varscan_snv_norm_path} \
-		--variant:varscan_INDEL ${varscan_indel_norm_path} \
-		-R ${params.ref}.fa -genotypeMergeOptions UNSORTED \
-		--disable_auto_index_creation_and_locking_when_reading_rods -o ${name}.allcallers.merged.vcf
-	"""
-}
-
-
-
-process NORMALIZE_MERGED_VARIANTS {
-	tag "Normalizing merged variants on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${name}/vcf/", mode:'copy'
-	
-	input:
-	tuple val(name), path (merged_vcf)
-
-	output:
-	tuple val(name), path ("*allmerged.norm.vcf")
-	
-	script:
-	"""
-	bcftools norm -f ${params.ref}.fa $merged_vcf -o ${name}.allmerged.norm.vcf
-	"""
-}
-
-
-process ANNOTATE {
-	tag "Annotating variants on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${name}/annotate/", mode:'copy'
-	
-	input:
-	tuple val(name), path (merged_normed_vcf)
-
-	output:
-	tuple val(name), path ("*allmerged.norm.annot.vcf")
-	
-	script:
-	"""
-	vep -i $merged_normed_vcf --cache --cache_version 95 --dir_cache $params.vep \
-	--fasta ${params.ref}.fa --merged --offline --vcf --everything -o ${name}.allmerged.norm.annot.vcf
-  
-	"""
-}
-
-
-
-// process NORMALIZE_VEP {
-// 	tag "Normalizing annotated variants on $name using $task.cpus CPUs and $task.memory memory"
-// 	publishDir "${launchDir}/${name}/annotate/", mode:'copy'
-	
-// 	input:
-// 	tuple val(name), path(annotated)
-
-// 	output:
-// 	tuple val(name), path("*allmerged.norm.annot.norm.vcf")
-	
-// 	script:
-// 	"""
-// 	biopet tool VepNormalizer -I $annotated -O ${name}.allmerged.norm.annot.norm.vcf -m explode  
-// 	"""
-// }
-
-
-// process CREATE_TXT {
-// 	tag "Simplify annotated table on $name using $task.cpus CPUs and $task.memory memory"
-// 	publishDir "${launchDir}/annotate/", mode:'copy'
-	
-// 	input:
-// 	tuple val(name), path(annotated_normed)
-
-// 	output:
-// 	tuple val(name), path("*.norm.merged.annot.normVEP.txt")
-	
-// 	script:
-// 	"""
-// 	python ${params.vcf_simplify} SimplifyVCF -toType table -inVCF $annotated_normed -out ${name}.norm.merged.annot.normVEP.txt  
-// 	"""
-// }
-
-
-// process CREATE_FINAL_TABLE {
-// 	tag "Creating final table on $name using $task.cpus CPUs and $task.memory memory"
-// 	publishDir "${launchDir}/annotate/", mode:'copy'
-	
-// 	input:
-// 	tuple val(name), path(annotated_normed)
-	
-// 	script:
-// 	"""
-// 	Rscript --vanilla ${params.create_table} ${launchDir}/annotate $run  
-// 	"""
-// }
-
-
-process CREATE_TXT {
-	tag "Simplify annotated table on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/annotate/", mode:'copy'
-	
-	input:
-	tuple val(name), path(annotated_normed)
-
-	output:
-	tuple val(name), path("*.norm.merged.annot.normVEP.txt")
-	
-	script:
-	"""
-	bcftools norm -m-both $annotated_normed > ${name}.allmerged.norm.vcf
-	python ${params.vcf2table_simple_mode} SimplifyVCF -toType table -inVCF $annotated_normed -out ${name}.norm.merged.annot.normVEP.txt  
-	"""
-}
-
-// process CREATE_FINAL_TABLE {
-// 	tag "Creating final table on $name using $task.cpus CPUs and $task.memory memory"
-// 	publishDir "${launchDir}/annotate/", mode:'copy'
-	
-// 	input:
-// 	tuple val(name), path(annotated_normed)
-	
-// 	script:
-// 	"""
-// 	Rscript --vanilla ${params.create_table} ${launchDir}/annotate $run  
-// 	"""
-// }
-
-process COVERAGE {
-	tag "Creating coverage on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/coverage/", mode:'copy'
-	
-	input:
-	tuple val(name), path(bam)
-
-	output:
-	tuple val(name), path("*.txt")
-	
-	script:
-	"""
-	bedtools coverage -abam ${params.covbed} -b $bam -d > ${name}.PBcoverage.txt   
-	"""
-}
-
-process COVERAGE_STATS {
-	tag "Creating coverage stats on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/coverage/", mode:'copy'
-	
-	input:
-	tuple val(name), path(whatever_navaznost)
-	
-	script:
-	"""
-	Rscript --vanilla ${params.coverstat} ${launchDir}/coverage $run  
-	"""
-}
-
-
-process MULTIQC {
-	tag "first QC on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${name}/coverage/", mode:'copy'
-	
-	input:
-	tuple val(name), path(bam)
-
-	output:
-	path "report.html"
-
-	script:
-	"""
+	echo BAMQC $name
 	samtools flagstat $bam > ${name}.flagstat
 	samtools stats $bam > ${name}.samstats
-        picard BedToIntervalList -I ${params.covbedpicard} -O ${name}.interval_list -SD ${params.ref}.dict
-	picard CollectHsMetrics -I $bam -BAIT_INTERVALS ${name}.interval_list -TARGET_INTERVALS ${name}.interval_list -R ${params.ref}.fa -O ${name}.aln_metrics
-	multiqc . -n report.html
+	picard CollectHsMetrics I=$bam BAIT_INTERVALS=$params.ivl TARGET_INTERVALS=$params.ivl R=${params.ref}.fa O=${name}.hs_metrics
+	picard CollectAlignmentSummaryMetrics I=$bam R=${params.ref}.fa O=${name}.aln_metrics
+	"""
+}
+
+process MULTIQC {
+	tag "MultiQC on all samples using $task.cpus CPUs and $task.memory memory"
+	// publishDir "${params.outdir}/multiqc/", mode:'copy'
+	label "m_mem"
+	label "s_cpu"
+
+	input:
+	path('*')
+
+	output:
+	path "*"
+
+	script:
+	"""
+	multiqc . -n MultiQC.html
 	"""
 
 }
 
- 
+
+
 workflow {
 	runlist = channel.fromList(params.samples)
 	reformatedInput	= REFORMAT_SAMPLE(runlist)
-	rawfastq = channel.fromFilePairs("${params.datain}/CLL*R{1,2}*", checkIfExists: true)
-	rawFQs =COLLECT_BASECALLED()
-	UMI_extract(rawFQs).view()
+	rawFQs = COLLECT_BASECALLED(reformatedInput)
+	umiFQs = UMI_extract(rawFQs)
+	trimmedFQs = TRIMMING(umiFQs)
+	firstBAM = FIRST_ALIGN_BAM(trimmedFQs)
+	sortedBamBai = SORT_INDEX(firstBAM)
+	dedupedBam = DEDUP(sortedBamBai)
+	BAMQC(dedupedBam)
+
+	rawVCFs = MUTECT2(dedupedBam)
+	filteredVCFs = FILTER_MUTECT(rawVCFs)
+	normedVCFs = NORMALIZE_MUTECT(filteredVCFs)
+	annotatedVCFs = ANNOTATE_MUTECT(normedVCFs)
+	filteredAnnotatedVCFs = FILTER_VCF(annotatedVCFs)
+	csv = VCF2CSV(filteredAnnotatedVCFs)
+
+	FLT3(dedupedBam).view()
+
 	// trimmed1	= TRIMMING_1(rawfastq)
 	// trimmed2	= TRIMMING_2(trimmed1)	
 	// sortedbam	= FIRST_ALIGN_BAM(trimmed2)
