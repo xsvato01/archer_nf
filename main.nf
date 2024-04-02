@@ -26,7 +26,7 @@ process COLLECT_BASECALLED {
 	script:
 	"""
 	echo COLLECT_BASECALLED $name
-	cp  /mnt/shared/MedGen/sequencing_results/primary_data/*${sample.run}/raw_fastq/${name}* ./
+	cp  /mnt/share/710000-CEITEC/713000-cmm/713003-pospisilova/base/sequencing_results/primary_data/*${sample.run}/raw_fastq/${name}* ./
 	"""
 } 
 
@@ -78,7 +78,7 @@ process FIRST_ALIGN_BAM {
 	tuple val(name), val(sample), path(reads)
 
 	output:
-    tuple val(name), val(sample), path("${name}.bam")
+	tuple val(name), val(sample), path("${name}.bam")
 
 	script:
 	rg = "\"@RG\\tID:${name}\\tSM:${name}\\tLB:${name}\\tPL:ILLUMINA\""
@@ -114,7 +114,7 @@ process SORT_INDEX {
 
 process DEDUP {
 	tag "DEDUP on $name using $task.cpus CPUs and $task.memory memory"
-	publishDir "${launchDir}/${sample.run}/mapped/", mode:'copy'
+	publishDir "${params.outDirectory}/${sample.run}/mapped/", mode:'copy'
 	label "s_cpu"
 	label "l_mem"
 
@@ -122,7 +122,7 @@ process DEDUP {
 	tuple val(name), val(sample), path(bam), path(bai)
 
 	output:
-    tuple val(name), val(sample), path("${name}.deduped.bam"), path("${name}.deduped.bai")
+	tuple val(name), val(sample), path("${name}.deduped.bam"), path("${name}.deduped.bai")
 
 	script:
 	"""
@@ -287,8 +287,9 @@ process FLT3 {
 	"""
 	echo FLT3 $name
 	source activate perl
-    tar -C /tmp -xf $params.flt3tar
+	tar -C /tmp -xf $params.flt3tar
 	perl /tmp/FLT3/FLT3_ITD_ext/FLT3_ITD_ext.pl --bam $bam --output ./ --ngstype amplicon --genome hg19 --fgbiojar $params.fgbio --picardjar $params.picard --refindex /tmp/FLT3/FLT3_bwaindex/FLT3_dna_e1415
+	touch ${name}.deduped_FLT3_ITD_summary.txt
 	ls -alh
 	"""	
 }
@@ -357,7 +358,7 @@ process COVERAGE_POSTPROCESS {
 }
 
 process MULTIQC {
-	tag "MultiQC on all samples using $task.cpus CPUs and $task.memory memory"
+	tag "MultiQC on all samples from $run using $task.cpus CPUs and $task.memory memory"
 	publishDir "${params.outDirectory}/${run}/QC/", mode:'copy'
 	container 'ewels/multiqc:v1.18'
 	label "xs_mem"
@@ -403,7 +404,6 @@ workflow {
 	annotatedVCFs = ANNOTATE_MUTECT(normedVCFs)
 	filteredAnnotatedVCFs = FILTER_VCF(annotatedVCFs)
 	CSVs = VCF2CSV(filteredAnnotatedVCFs)
-	// CSVs.groupTuple().view{"$it is groupTuple CSVs"}
 	MERGE_TABLES(CSVs.groupTuple())
 
 	FLT3(dedupedBam)	
