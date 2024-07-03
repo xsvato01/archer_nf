@@ -26,14 +26,18 @@ process COLLECT_BASECALLED {
 	script:
 	"""
 	echo COLLECT_BASECALLED $name
-	cp  /mnt/share/710000-CEITEC/713000-cmm/713003-pospisilova/base/sequencing_results/primary_data/*${sample.run}/raw_fastq/${name}* ./
+	cp  /cmbg/sequencing_results/primary_data/*${sample.run}/raw_fastq/${name}* ./
 	"""
 } 
 
+// ### UMI a read preprocessing ###
+// # adaptors to trim: AACCGCCAGGAGT
+// # UMI 1-8 bases in read position
 process UMI_extract {
 	tag "UMI_extract on $name using $task.cpus CPUs and $task.memory memory"
 	label "s_cpu"
 	label "xs_mem"
+	container "quay.io/biocontainers/mulled-v2-452184f0fcbe6b0806405adb8f0b3873a7bd70a8:9c5efc89686d718e262836409bbf8541c6c5a159-0"
 	
 	input:
 	tuple val(name), val(sample), path(fwd), path(rev)
@@ -44,9 +48,10 @@ process UMI_extract {
 	script:
 	""" 
 	echo UMI_extract $name
-	source activate umi_tools
-	umi_tools extract -I ${fwd} --bc-pattern=NNNNNNNN --read2-in=${rev} --stdout=${name}.umi.R1.fastq.gz --read2-out=${name}.umi.R2.fastq.gz
+	umi_tools extract -I ${fwd} --bc-pattern=NNNNNNNN --read2-in=${rev} --stdout=${name}.umi.R1.fastq.gz --read2-out=${name}.umi.R2.fastq.gz || \
+    umi_tools extract --ignore-read-pair-suffixes -I ${fwd} --bc-pattern=NNNNNNNN --read2-in=${rev} --stdout=${name}.umi.R1.fastq.gz --read2-out=${name}.umi.R2.fastq.gz
 	"""
+	// --ignore-read-pair-suffixes // use this for MGI
 }
 
 process TRIMMING {
@@ -212,6 +217,7 @@ process ANNOTATE_MUTECT {
 
 process FILTER_VCF {
 	tag "FILTER_VCF on $name using $task.cpus CPUs $task.memory"
+	publishDir "${params.outDirectory}/${sample.run}/vcfs/", mode:'copy'
 	container "staphb/bcftools:1.10.2"
 	label "xxs_mem"
 	label "s_cpu"
@@ -273,9 +279,9 @@ process MERGE_TABLES {
 process FLT3 {
 	tag "FLT3 on $name using $task.cpus CPUs $task.memory"
 	publishDir "${params.outDirectory}/${sample.run}/FLT3/", mode:'copy'
-	label "xs_mem"
+	label "m_mem"
 	label "s_cpu"
-	// errorStrategy 'ignore'
+	errorStrategy { task.exitStatus in [143,137,104,134,139,247,null,'', '-'] ? 'retry' : 'ignore' } //this does not really work
 
 	input:
 	tuple val(name), val(sample), path(bam), path(bai)
@@ -381,9 +387,26 @@ process MULTIQC {
 
 
 workflow {
-	runlist = channel.fromList(params.samples)
-	reformatedInput	= REFORMAT_SAMPLE(runlist)
-	rawFQs = COLLECT_BASECALLED(reformatedInput)
+	// runlist = channel.fromList(params.samples)
+	// reformatedInput	= REFORMAT_SAMPLE(runlist)
+	// rawFQs = COLLECT_BASECALLED(reformatedInput)
+
+	rawFQs = Channel.fromPath("${params.homeDir}/samplesheet.csv")
+    . splitCsv( header:true )
+    . map { row ->
+        def meta = [name:row.name, run:row.run]
+        def baseDir = new File("${params.baseDir}")
+		def runDir = baseDir.listFiles(new FilenameFilter() {
+			public boolean accept(File dir, String name) {
+				return name.endsWith(meta.run)
+			}
+		})[0] //get the real folderName that has prepended date
+        [meta.name, meta, 
+			file("${runDir}/raw_fastq/${meta.name}_R1.fastq.gz", checkIfExists: true),
+			file("${runDir}/raw_fastq/${meta.name}_R2.fastq.gz", checkIfExists: true),
+        ]
+    }.view()
+
 	umiFQs = UMI_extract(rawFQs)
 	trimmedFQs = TRIMMING(umiFQs)
 	firstBAM = FIRST_ALIGN_BAM(trimmedFQs)
