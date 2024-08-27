@@ -1,42 +1,10 @@
-process REFORMAT_SAMPLE {
-	tag "Reformating $sample.name using $task.cpus CPUs $task.memory"
-	label "s_cpu"
-	label "xxs_mem"
-
-	input:
-	val sample
-
-	output:
-	tuple val(sample.name), val(sample)
-
-	""" """ //this is not an error
-}
-
-process COLLECT_BASECALLED {
-	tag "COLLECT_BASECALLED on $name using $task.cpus CPUs and $task.memory memory"
-	label "s_cpu"
-	label "xxs_mem"
-
-	input:
-	tuple val(name), val(sample)
-
-	output:
-	tuple val(name), val(sample), path("*R1*.fastq.gz"), path("*R2*.fastq.gz")
-
-	script:
-	"""
-	echo COLLECT_BASECALLED $name
-	cp  /cmbg/sequencing_results/primary_data/*${sample.run}/raw_fastq/${name}* ./
-	"""
-} 
-
 // ### UMI a read preprocessing ###
 // # adaptors to trim: AACCGCCAGGAGT
 // # UMI 1-8 bases in read position
 process UMI_extract {
 	tag "UMI_extract on $name using $task.cpus CPUs and $task.memory memory"
 	label "s_cpu"
-	label "xs_mem"
+	label "xxs_mem"
 	container "quay.io/biocontainers/mulled-v2-452184f0fcbe6b0806405adb8f0b3873a7bd70a8:9c5efc89686d718e262836409bbf8541c6c5a159-0"
 	
 	input:
@@ -98,7 +66,7 @@ process FIRST_ALIGN_BAM {
 process SORT_INDEX {
 	tag "Sort index on $name using $task.cpus CPUs and $task.memory memory"
 	label "m_mem"
-	label "s_cpu"
+	label "xs_cpu"
 
 	input:
 	tuple val(name), val(sample), path(bam)
@@ -121,7 +89,7 @@ process DEDUP {
 	tag "DEDUP on $name using $task.cpus CPUs and $task.memory memory"
 	publishDir "${params.outDirectory}/${sample.run}/mapped/", mode:'copy'
 	label "s_cpu"
-	label "l_mem"
+	label "m_mem"
 
 	input:
 	tuple val(name), val(sample), path(bam), path(bai)
@@ -140,6 +108,8 @@ process DEDUP {
 
 process MUTECT2 {
 	tag "MUTECT2 on $name using $task.cpus CPUs and $task.memory memory"
+	publishDir "${params.outDirectory}/${sample.run}/vcfs/", mode:'copy'
+
 	label "m_mem"
 	label "s_cpu"
 
@@ -197,6 +167,8 @@ process NORMALIZE_MUTECT {
 
 process ANNOTATE_MUTECT {
 	tag "ANNOTATE_MUTECT on $name using $task.cpus CPUs $task.memory"
+	publishDir "${params.outDirectory}/${sample.run}/vcfs/", mode:'copy'
+
 	label "s_mem"
 	label "s_cpu"
 
@@ -325,7 +297,7 @@ process BAMQC {
 
 process COVERAGE {
 	tag "COVERAGE on $name using $task.cpus CPUs and $task.memory memory"
-	label "l_mem"
+	label "xl_mem"
 	label "s_cpu"
 
 	input:
@@ -346,7 +318,7 @@ process COVERAGE_POSTPROCESS {
 	tag "COVERAGE_POSTPROCESS on $name using $task.cpus CPUs and $task.memory memory"
 	publishDir "${params.outDirectory}/${sample.run}/Cov/", mode:'copy'
 	label "s_mem"
-	label "xs_mem"
+	label "xxs_mem"
 
 	input:
 	tuple val(name), val(sample), path(txt)
@@ -378,7 +350,7 @@ process MULTIQC {
 
 	script:
 	"""
-	echo MULTIQC $run
+	echo MULTIQC $run 
 	multiqc . -n MultiQC.html
 	"""
 
@@ -387,25 +359,33 @@ process MULTIQC {
 
 
 workflow {
-	// runlist = channel.fromList(params.samples)
-	// reformatedInput	= REFORMAT_SAMPLE(runlist)
-	// rawFQs = COLLECT_BASECALLED(reformatedInput)
-
-	rawFQs = Channel.fromPath("${params.homeDir}/samplesheet.csv")
-    . splitCsv( header:true )
-    . map { row ->
-        def meta = [name:row.name, run:row.run]
+	// rawFQs = Channel.fromPath("${params.homeDir}/samplesheet.csv")
+	rawFQs = Channel.fromPath("/storage2/Myelo/src/samplesheet.csv")
+    .splitCsv(header: true)
+    .map { row ->
         def baseDir = new File("${params.baseDir}")
-		def runDir = baseDir.listFiles(new FilenameFilter() {
-			public boolean accept(File dir, String name) {
-				return name.endsWith(meta.run)
-			}
-		})[0] //get the real folderName that has prepended date
-        [meta.name, meta, 
-			file("${runDir}/raw_fastq/${meta.name}_R1.fastq.gz", checkIfExists: true),
-			file("${runDir}/raw_fastq/${meta.name}_R2.fastq.gz", checkIfExists: true),
-        ]
-    }.view()
+        def runDir = baseDir.listFiles(new FilenameFilter() {
+            public boolean accept(File dir, String name) {
+                return name.endsWith(row.run)
+            }
+        })[0] //get the real folderName that has prepended date
+        
+        def fileR1 = file("${runDir}/raw_fastq/${row.name}_R1.fastq.gz", checkIfExists: true)
+        def fileR2 = file("${runDir}/raw_fastq/${row.name}_R2.fastq.gz", checkIfExists: true)
+
+        def fileSizeR1 = fileR1.size()
+        def fileSizeR2 = fileR2.size()
+		def size = MemoryUnit.of(fileSizeR1 + fileSizeR2).toMega() / 1000
+
+		def meta = [name: row.name, run: row.run, size: size]
+        [
+            meta.name,
+            meta,
+            fileR1,
+            fileR2,
+		]
+    }
+    .view()
 
 	umiFQs = UMI_extract(rawFQs)
 	trimmedFQs = TRIMMING(umiFQs)
